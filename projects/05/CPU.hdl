@@ -1,0 +1,133 @@
+// This file is part of www.nand2tetris.org
+// and the book "The Elements of Computing Systems"
+// by Nisan and Schocken, MIT Press.
+// File name: projects/05/CPU.hdl
+
+/**
+ * The Hack CPU (Central Processing unit), consisting of an ALU,
+ * two registers named A and D, and a program counter named PC.
+ * The CPU is designed to fetch and execute instructions written in 
+ * the Hack machine language. In particular, functions as follows:
+ * Executes the inputted instruction according to the Hack machine 
+ * language specification. The D and A in the language specification
+ * refer to CPU-resident registers, while M refers to the external
+ * memory location addressed by A, i.e. to Memory[A]. The inM input 
+ * holds the value of this location. If the current instruction needs 
+ * to write a value to M, the value is placed in outM, the address 
+ * of the target location is placed in the addressM output, and the 
+ * writeM control bit is asserted. (When writeM==0, any value may 
+ * appear in outM). The outM and writeM outputs are combinational: 
+ * they are affected instantaneously by the execution of the current 
+ * instruction. The addressM and pc outputs are clocked: although they 
+ * are affected by the execution of the current instruction, they commit 
+ * to their new values only in the next time step. If reset==1 then the 
+ * CPU jumps to address 0 (i.e. pc is set to 0 in next time step) rather 
+ * than to the address resulting from executing the current instruction. 
+ */
+
+CHIP CPU {
+
+    IN  inM[16],         // M value input  (M = contents of RAM[A])
+        instruction[16], // Instruction for execution
+        reset;           // Signals whether to re-start the current
+                         // program (reset==1) or continue executing
+                         // the current program (reset==0).
+
+    OUT outM[16],        // M value output
+        writeM,          // Write to M? 
+        addressM[15],    // Address in data memory (of M)
+        pc[15];          // address of next instruction
+
+    PARTS:
+    // Put your code here:
+
+    // decode the instruction
+    // if [15] is 0, it's an A-instruction
+    // then set A to instruction[0..14]
+    // load value into A register
+
+    // else it's a C-instruction
+    // instruction[15] = 1
+    // if instruction[12] == 0, y = A
+    //                    == 1, y = M
+
+    //=========================== tick ======================================
+    // within tick, the inputs to chips are read and change the states of chips
+    // those chips that do not consist of DFFs may have stable outputs when tick finishes.
+
+    //--------------------- DEST -------------------------------
+    // it's easy to see where to write
+    And(a=instruction[15], b=instruction[4], out=selD);
+    And(a=instruction[15], b=instruction[5], out=selA);
+    And(a=instruction[15], b=instruction[3], out=selM, out=writeM);
+    Memory(in=ALUResult, load=selM, address=AReg, out=M);
+    Memory(in[0..15]=false, load=false, address=AReg, out=mVal);
+
+    //-------------------- COMP -------------------------------
+    // computation is accomplished within a tick
+
+    // get M from A
+    // M is not a register
+    Mux16(a[0..14]=AReg, a[15]=false, b=inM, sel=instruction[12], out=ALUy);
+
+    ALU(x=DReg, y=ALUy, zx=instruction[11], nx=instruction[10], zy=instruction[9],
+        ny=instruction[8], f=instruction[7], no=instruction[6],
+        out=ALUResult, out=outM, out[15]=lt, out[0..7]=outLH, out[8..15]=outHH, zr=zr, ng=ng);
+
+    // =========================== tock =======================================
+    // chips with DFF have to wait for stable output until tock finishes 
+    // A
+    Not(in=instruction[15], out=isAI);
+    Mux16(a=ALUResult, b=instruction, sel=isAI, out=AIn);
+    Or(a=selA, b=isAI, out=setA);
+    ARegister(in=AIn, load=setA, out[0..14]=AReg, out[0..14]=addressM);
+    // D
+    DRegister(in=ALUResult, load=selD, out=DReg);
+
+    //--------------------- JUMP --------------------------------
+
+    // analyze ALUResult
+    // ALUResult[15] is negative.
+    /// --- negative
+    // ALUResult[15] // 6
+    /// --- zero
+    Or8Way(in=outLH, out=lowHalfPositive);
+    Or8Way(in=outHH, out=highHalfPositive);
+    Or(a=lowHalfPositive, b=highHalfPositive, out=ne); //1
+    Not(in=ne, out=eq); //2
+    /// -- Positive
+    Not(in=lt, out=ge); //3
+    And(a=ge, b=ne, out=gt); // 4
+    Or(a=lt, b=eq, out=le); //5
+
+    DMux8Way(in=instruction[15], sel=instruction[0..2], 
+        a=nojump, b=sgt, c=seq, d=sge, e=slt, f=sne, g=sle, h=jmp);
+    
+    And(a=gt, b=sgt, out=jgt);
+    And(a=ge, b=sge, out=jge);
+    And(a=eq, b=seq, out=jeq);
+    And(a=ne, b=sne, out=jne);
+    And(a=lt, b=slt, out=jlt);
+    And(a=le, b=sle, out=jle);
+
+    Or(a=jgt, b=jge, out=or1);
+    Or(a=or1, b=jeq, out=or2);
+    Or(a=or2, b=jne, out=or3);
+    Or(a=or3, b=jlt, out=or4);
+    Or(a=or4, b=jle, out=or5);
+    Or(a=or5, b=jmp, out=setPCtoA);
+
+    Mux16(a[0..14]=AReg, b[0..15]=false, sel=reset, out=configPC);
+
+    Inc16(in=PCReg, out=plus1PC);
+    Or(a=isAI, b=nojump, out=letPCPlus1);
+    Not(in=setPCtoA, out=dontSetPCtoA);
+    Not(in=reset, out=dontReset);
+    Or(a=dontSetPCtoA, b=letPCPlus1, out=againLetPCPlus1);
+    And(a=againLetPCPlus1, b=dontReset, out=justLetPCPlus1);
+
+    Mux16(a=configPC, b=plus1PC, sel=justLetPCPlus1, out=nextPC);
+
+    Register(in=nextPC, load=true, out=PCReg, out[0..14]=pc);
+
+}
